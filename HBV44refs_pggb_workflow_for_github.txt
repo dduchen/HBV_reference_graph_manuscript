@@ -1,0 +1,202 @@
+all genotype and subgenotype reference sequences identified within:
+Mcnaughton, A. L., Revill, P. & Littlejohn, M. Analysis of genomic-length HBV sequences to determine genotype and subgen$
+# https://www.microbiologyresearch.org/content/journal/jgv/10.1099/jgv.0.001387
+# Table 1: Accession numbers, presumed genotype for 44 selected reference sequences: https://www.biorxiv.org/content/10.1101/831891v2.full
+#
+# data: https://figshare.com/articles/Hepatitis_B_Virus_HBV_Genotype_and_Subtype_Reference_Sequences/8851946 (Figure 4)
+################
+# cleaning fasta files prior to analysis
+R; options(stringsAsFactors=F);library(Biostrings)
+ref<-readDNAStringSet("HBV_ref_sequences_McNaughton2019.fasta","fasta")
+range(width(ref))
+3182 3248
+sum(width(ref)) / length(ref) #3210.023 average genome length
+writeXStringSet(ref,'HBV_ref_sequences_6-30-2020.fasta')
+#
+# local Linux environment
+# pggb installed via conda
+cd ~/Documents/Research/HBV_Reference/HBV_Pangenome/
+# estimate pairwise distances, for -p term in pggb
+#
+mash triangle -i /home/dylan/Documents/Research/HBV_Reference/orig_refs/HBV_ref_sequences_6-30-2020.fasta -S 123 >mash_distance_triangle
+#
+/usr/bin/R
+options(stringsAsFactors=F)
+dat<-read.table("mash_distance_triangle",skip=1,sep="\t",header=F,fill=T)
+mash_dists<-unlist(dat,use.names=F); mash_dists<-na.omit(as.numeric(mash_dists))
+summary(mash_dists)
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max.
+# 0.00745 0.06210 0.06932 0.06811 0.07786 0.12330
+prop.table(table(mash_dists>0.05))
+#     FALSE      TRUE
+# 0.1627907 0.8372093
+# ~84% pairwise dists > 5%
+prop.table(table(mash_dists>0.1))
+#     FALSE       TRUE
+#0.95560254 0.04439746
+# ~4% pairwise dists >10% (max of 12%)
+#
+pggb -i ~/Documents/Research/HBV_Reference/orig_refs/HBV_ref_sequences_6-30-2020.fasta -p 85 -s 500 -n 44 -k 9 -e 1000 -j 1500 -G 1500,3100 -v -L -m --poa-params 1,4,6,2,26,1 -N -C cons,100,1000 -o HBV_44refs_pggb
+# no difference btween graphs created with -p=85 or -p=75
+
+# -- consensus sequence, most similar blastn match of longest contig (~3kb) (96.4% sequence identity) = C/D recombinant genotype [GenBank: MN683605.1, Genotype: C/D recombinant, subtype CD1]
+# -- @100X | @1000X consensus sequence, 1 SNP
+#
+#
+setwd("~/Documents/Research/HBV_Reference/HBV_Pangenome/HBV_44refs_pggb")
+filename<-list.files(pattern=".paf")
+library(pafr, quietly=TRUE)
+ali <- read_paf(filename)
+dotplot(ali)
+#
+summary(ali$alen)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.
+#   3182    3215    3215    3214    3215    3248
+plot_coverage(ali)
+# all aligned well
+#
+#-----
+cd ~/Documents/Research/HBV_Reference/HBV_Pangenome/HBV_44refs_pggb
+#cp HBV_ref_sequences_6-30-2020.fasta.0426f82.0a79cd3.seqwish.gfa HBV_44refs.seqwish.gfa
+#cp HBV_ref_sequences_6-30-2020.fasta.0426f82.0a79cd3.6fb8f17.smooth.gfa HBV_44refs.smooth.gfa
+#cp 'HBV_ref_sequences_6-30-2020.fasta.0426f82.0a79cd3.6fb8f17.cons@100__y_0_1000000.gfa' HBV_44refs.consensus.gfa
+# -- + alignment .paf file moved to onedrive/github docs
+#
+###############
+# indexing:
+###############
+#
+cd ~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/
+# manually create indexes
+###########################
+for each in ./*.gfa;do export FNAME="${each##*/}";export BASE="${FNAME%.gfa}"; export BASE="${BASE/@}"; echo $FNAME; echo $BASE;
+vg convert -g $FNAME -v > ${BASE}".vg";
+# normalize (n) until normal (U) - retains paths, -X chop nodes in the graph so they are not more than N bp long
+vg mod -nU 10 -c -X 256 -M 44 ${BASE}".vg" > ${BASE}"_norm.vg";
+done
+# -- indexing of the normalized graph
+for each in ./*norm.vg;do export FNAME="${each##*/}";export BASE="${FNAME%.vg}"; echo $FNAME; echo $BASE;
+vg index -x ${BASE}".xg" -p -t 16 ${BASE}".vg" ;
+# GBWT from embedded paths in -x, use a greedy path cover - no input GBWT file required
+vg gbwt -E -x ${BASE}".xg" --pass-paths --paths-as-samples -o ${BASE}".gbwt" # add -P here?
+vg gbwt -Mc ${BASE}".gbwt"
+# Augment the GBWT with a greedy path cover of missing components.
+vg gbwt -x ${BASE}".xg" -o ${BASE}".augmented.gbwt" --pass-paths -a ${BASE}".gbwt"
+vg gbwt -x ${BASE}".xg" -l --pass-paths -o ${BASE}".augmented.gbwt" ${BASE}".augmented.gbwt" # path covering based on sampling local haplotypes in same proportions as input GBWT
+vg gbwt -Mc ${BASE}".augmented.gbwt"
+# 110 paths with names, 65 samples with names, 65 haplotypes, 46 contigs with names
+rm ${BASE}".gbwt" # keep the augmented version
+# create GBZ format for giraffe mapping
+vg gbwt -x ${BASE}".xg" ${BASE}".augmented.gbwt" -g ${BASE}".giraffe.gbz" --gbz-format
+#
+# gcsa index:
+vg prune -u -g ${BASE}".augmented.gbwt" -m node_mapping ${BASE}".vg" > ${BASE}".pruned.vg"
+vg index -g ${BASE}".gcsa" -f node_mapping ${BASE}".pruned.vg" -V
+vg snarls ${BASE}".xg" > ${BASE}".snarls.pb"; #maybe include -e (path-traversals, only consider traversals that correspond to paths in the graph)
+vg index -x ${BASE}".xg" -s ${BASE}".snarls.pb" -j ${BASE}".dist";
+vg minimizer -g ${BASE}".augmented.gbwt" -d ${BASE}".dist" -o ${BASE}".min" ${BASE}".xg"
+rm ${BASE}".pruned.vg";rm node_mapping
+done
+##
+# -- re-ran on 3/16/2022 --> better haplotype/thread coverage for giraffe mapping
+##############
+# -- add paths to the reference graph, can then view on Bandage
+# You can view the position of the nodes along the paths in the graph using Bandage. First use these commands to insert the paths into the graph:
+# output paths as alignments within the graph
+vg paths -x HBV_44refs.seqwish_norm.vg -X >HBV_44refs.seqwish_norm_paths.GAM
+vg augment -B HBV_44refs.seqwish_norm.vg HBV_44refs.seqwish_norm_paths.GAM > HBV_44refs.seqwish_norm.withpaths.vg
+vg view HBV_44refs.seqwish_norm.withpaths.vg -g >HBV_44refs.seqwish_norm.withpaths.gfa
+Then create a CSV file with the node labels:
+grep -P '^S' < HBV_44refs.seqwish.gfa | cut -f 2,4 | sed '1iNode\tPath\' | sed 's/\\t/\t/g' > HBV_44refs.seqwish_norm.withpaths.csv
+
+ 
+
+###############################################################################################################
+################################### --- With extended flanking sequence --- ###################################
+################################### -- PGGB --> circularize? alternatively vg msga
+################################### --- make using Bifrost graph directly? + circularize
+cd ~/work/dduchen3/projects/HBV/reference/pangenome_ref_tests/
+# MARCC:
+# McNaughton HBV sequences:
+# /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/all_HBV_seqs.fasta
+R
+library(Biostrings);library(data.table);options(stringsAsFactors=F)
+seqs<-readDNAStringSet("/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/all_HBV_seqs.fasta")
+# add first 120bp from beginning to end:
+for(i in 1:length(seqs)){
+  tmpref<-seqs[i]
+  seqs[i]<-paste0(tmpref[[1]],tmpref[[1]][1:120])
+}
+#writeXStringSet(seqs,filepath="~/work/dduchen3/projects/HBV/reference/pangenome_ref_tests/McNaughton_HBV_QCseqs_extended.fasta",format="fasta")
+# 44 reference sequences
+#--
+seqs<-readDNAStringSet("/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/all44_refs/HBV_ref_sequences_6-30-2020.fasta")
+# add first 120bp from beginning to end:
+for(i in 1:length(seqs)){
+  tmpref<-seqs[i]
+  seqs[i]<-paste0(tmpref[[1]],tmpref[[1]][1:120])
+}
+#writeXStringSet(seqs,filepath="~/work/dduchen3/projects/HBV/reference/pangenome_ref_tests/McNaughton_HBV_44refs_extended.fasta",format="fasta")
+#
+##################################################
+# PGGB using the extended reference sequences
+# cluster testing  - works
+ml anaconda
+conda activate odgi
+cd ~/work/dduchen3/projects/HBV/reference/pangenome_ref_tests/
+#pggb -i McNaughton_HBV_44refs_extended.fasta -p 85 -s 500 -n 44 -k 9 -e 1000 -j 1500 -G 1500,3100 -v -L -m --poa-params 1,4,6,2,26,1 -N -C cons,100,1000 -o HBV_44refs_pggb_extended
+# -- vg msga, specify circular genomes + normalize
+cd ~/work/dduchen3/projects/HBV/reference/pangenome_ref_tests/HBV_44refs_msga_extended
+vg msga -f ../McNaughton_HBV_44refs_extended.fasta -a -Z > McNaughton_HBV_44refs.vg
+# index circular graphs #
+vg mod -nU 10 -c -X 256 -M 44 McNaughton_HBV_44refs.vg > McNaughton_HBV_44refs_norm.vg
+# circularize without the extension?
+cd ~/work/dduchen3/projects/HBV/reference/pangenome_ref_tests/HBV_44refs_msga
+vg msga -f ~/work/dduchen3/projects/HBV/reference/all44_refs/HBV_ref_sequences_6-30-2020.fasta -a -Z > McNaughton_HBV_44refs_circ.vg
+# index circular graphs #
+vg mod -nU 10 -c -X 256 -M 44 McNaughton_HBV_44refs_circ.vg > McNaughton_HBV_44refs_norm.vg
+vg view McNaughton_HBV_44refs_circ.norm.vg > McNaughton_HBV_44refs_circ.norm.gfa
+# Nodes: 3641
+# Edges: 5493
+# Total length: 5445
+#
+# PGGB --> vg circularize
+cd ~/work/dduchen3/projects/HBV/reference/pangenome_ref_tests/pggb_ref/all44_wfmash_circ
+cp ~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/HBV_44refs.seqwish.gfa ./
+vg convert HBV_44refs.seqwish.gfa -v >HBV_44refs.seqwish.vg
+vg paths -Lv HBV_44refs.seqwish.vg >paths.txt
+vg circularize -P paths.txt HBV_44refs.seqwish.vg > HBV_44refs.seqwish_circ.vg
+vg view -V HBV_44refs.seqwish_circ.vg -g >HBV_44refs.seqwish_circ.gfa
+vg mod -n HBV_44refs.seqwish_circ.vg > HBV_44refs.seqwish_circ_norm_tmp1.vg
+vg mod -X 32 HBV_44refs.seqwish_circ_norm_tmp1.vg > HBV_44refs.seqwish_circ_norm_tmp2.vg
+vg ids -c HBV_44refs.seqwish_circ_norm_tmp2.vg > HBV_44refs.seqwish_circ_norm.vg
+vg view HBV_44refs.seqwish_circ_norm.vg -g >HBV_44refs.seqwish_circ_norm.gfa
+# Nodes: 3641
+# Edges: 5493
+# Total length: 5445
+
+#########################################
+# -- indexing of the normalized graph
+for each in ./*norm.vg;do export FNAME="${each##*/}";export BASE="${FNAME%.vg}"; echo $FNAME; echo $BASE;
+vg index -x ${BASE}".xg" -p -t 16 ${BASE}".vg" ;
+# GBWT from embedded paths in -x, use a greedy path cover - no input GBWT file required
+vg gbwt -E -x ${BASE}".xg" --pass-paths --paths-as-samples -o ${BASE}".gbwt" # add -P here?
+vg gbwt -Mc ${BASE}".gbwt"
+# Augment the GBWT with a greedy path cover of missing components.
+vg gbwt -x ${BASE}".xg" -o ${BASE}".augmented.gbwt" --pass-paths -a ${BASE}".gbwt"
+vg gbwt -x ${BASE}".xg" -l --pass-paths -o ${BASE}".augmented.gbwt" ${BASE}".augmented.gbwt" # path covering based on sampling local haplotypes in same proportions as input GBWT
+vg gbwt -Mc ${BASE}".augmented.gbwt"
+rm ${BASE}".gbwt" # keep the augmented version
+# create GBZ format for giraffe mapping
+vg gbwt -x ${BASE}".xg" ${BASE}".augmented.gbwt" -g ${BASE}".giraffe.gbz" --gbz-format
+#
+# gcsa index:
+vg prune -u -g ${BASE}".augmented.gbwt" -m node_mapping ${BASE}".vg" > ${BASE}".pruned.vg"
+vg index -g ${BASE}".gcsa" -f node_mapping ${BASE}".pruned.vg" -V
+vg snarls ${BASE}".xg" > ${BASE}".snarls.pb"; #maybe include -e (path-traversals, only consider traversals that correspond to paths in the graph)
+vg index -x ${BASE}".xg" -s ${BASE}".snarls.pb" -j ${BASE}".dist";
+vg minimizer -g ${BASE}".augmented.gbwt" -d ${BASE}".dist" -o ${BASE}".min" ${BASE}".xg"
+rm ${BASE}".pruned.vg";rm node_mapping
+done
+#
+
