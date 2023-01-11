@@ -1,0 +1,195 @@
+# Simulate illumina-type reads using a HBV-specific error model:
+# -- allows us to:
+# -- generate mixed samples from a multi-fasta reference file
+# -- vary the coverage between strains according to a coverage distribution
+# https://academic.oup.com/bioinformatics/article/35/3/521/5055123
+# https://github.com/HadrienG/InSilicoSeq | https://insilicoseq.readthedocs.io/en/latest/?badge=latest
+
+# Alternatively: https://github.com/CAMI-challenge/CAMISIM/wiki/User-manual#step-3-metagenome-sample-simulation
+
+# conda insilicoseq simulations:
+conda activate simulation
+
+#create an error model - use real sample, but also the miseq error model
+# Model name 	Read length
+#     MiSeq   	300 bp <---
+#     HiSeq  	  125 bp
+#     NovaSeq 	150 bp
+# MiSeq model was built from an ocean metagenomics project in Kenya (sample accession number ERR1912174).
+# HiSeq and NovaSeq models were built from human run obtained via basespace.
+### ---
+#############################################################
+# -- for each of the 12 references, 2mil. simulated reads -- #
+#############################################################
+cd ~/work/dduchen3/projects/testing/simulations/HBV
+cp ~/work/dduchen3/projects/HBV/reference/core12_refs/HBV_core_ref_sequences_8-18-2020.fasta HBV_12refs.fasta
+#--
+conda activate simulation
+# create abundances file:
+perl -ne 'if(/^>(\S+)/){print "$1\n"}' HBV_12refs.fasta >abundances12.txt #extract IDs --> 1/12
+#-- 24million reads for 12 samples - 1 mil. forward/reverse PE reads per core reference
+iss generate -g HBV_12refs.fasta --abundance_file abundances12.txt -n 24M --cpus 8 --model miseq --output core12_simreads_MODELmiseq
+#--
+###############################################################
+# -- Randomly subsample reads from core12 simulation for new fastq files:
+rasusa --input core12_simreads_MODELmiseq_R1.fastq --coverage 25000 --genome-size 3.2kb -s 1234 -o core12_random1234_R1.fastq
+rasusa --input core12_simreads_MODELmiseq_R2.fastq --coverage 25000 --genome-size 3.2kb -s 1234 -o core12_random1234_R2.fastq
+#--
+rasusa --input core12_simreads_MODELmiseq_R1.fastq --coverage 25000 --genome-size 3.2kb -s 321 -o core12_random321_R1.fastq
+rasusa --input core12_simreads_MODELmiseq_R2.fastq --coverage 25000 --genome-size 3.2kb -s 321 -o core12_random321_R2.fastq
+# --
+# -- move simulated reads out of testing dir -->
+cd ~/work/dduchen3/projects/HBV/reference/simulated_reads/core12
+cp ~/work/dduchen3/projects/testing/simulations/HBV/core12_simreads_MODELmiseq_R* ./
+cp ~/work/dduchen3/projects/testing/simulations/HBV/abundances12.txt ./
+cp ~/work/dduchen3/projects/testing/simulations/HBV/core12_random* ./
+# - interleave reads for paired-end giraffe mapping:
+ml bbmap
+reformat.sh in1=core12_random1234_R1.fastq in2=core12_random1234_R2.fastq out=core12_random1234.fastq
+reformat.sh in1=core12_random321_R1.fastq in2=core12_random321_R2.fastq out=core12_random321.fastq
+# verify
+reformat.sh in=core12_random1234.fastq vint
+reformat.sh in=core12_random321.fastq vint
+
+#############################################################
+# -- for each of the 44 references, simulate 2mill reads -- #
+# -- update, use hiseq error model, can use fewer reads
+#############################################################
+conda activate simulation
+#--
+cd ~/work/dduchen3/projects/HBV/reference/simulated_reads
+for each in ~/work/dduchen3/projects/HBV/reference/all44_refs/individual_refs/*.fasta;
+do export $each; BASE=${each##*/};BASE=${BASE%*.fasta};echo $BASE;
+iss generate -g $each -n 2M --cpus 8 --model miseq --output ${BASE}"_2Msimreads_MODELmiseq"; done
+#--
+#-- concatenate all then randomly subsample
+cat *_R1.fastq > HBV_44_Refs_simulated_R1.fastq
+cat *_R2.fastq > HBV_44_Refs_simulated_R2.fastq
+# -- Randomly subsample reads from all44 simulated genotypes for new fastq files:
+# -- setting the same seed,  paired reads remain paired
+rasusa -i HBV_44_Refs_simulated_R1.fastq.gz -i HBV_44_Refs_simulated_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 1234 -o all44_random1234_R1.fastq -o all44_random1234_R2.fastq
+rasusa -i HBV_44_Refs_simulated_R1.fastq.gz -i HBV_44_Refs_simulated_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 321 -o all44_random321_R1.fastq -o all44_random321_R2.fastq
+rasusa -i HBV_44_Refs_simulated_R1.fastq.gz -i HBV_44_Refs_simulated_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 999 -o all44_random999_R1.fastq -o all44_random999_R2.fastq
+rasusa -i HBV_44_Refs_simulated_R1.fastq.gz -i HBV_44_Refs_simulated_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 2 -o all44_random2_R1.fastq -o all44_random2_R2.fastq
+rasusa -i HBV_44_Refs_simulated_R1.fastq.gz -i HBV_44_Refs_simulated_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 729 -o all44_random729_R1.fastq -o all44_random729_R2.fastq
+rasusa -i HBV_44_Refs_simulated_R1.fastq.gz -i HBV_44_Refs_simulated_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 109 -o all44_random109_R1.fastq -o all44_random109_R2.fastq
+rasusa -i HBV_44_Refs_simulated_R1.fastq.gz -i HBV_44_Refs_simulated_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 2021 -o all44_random2021_R1.fastq -o all44_random2021_R2.fastq
+#--
+#--
+# - interleave reads for paired-end giraffe mapping:
+ml bbmap
+reformat.sh ow=t in1=all44_random1234_R1.fastq in2=all44_random1234_R2.fastq out=all44_random1234.fastq
+reformat.sh ow=t in1=all44_random321_R1.fastq in2=all44_random321_R2.fastq out=all44_random321.fastq
+reformat.sh ow=t in1=all44_random999_R1.fastq in2=all44_random999_R2.fastq out=all44_random999.fastq
+reformat.sh ow=t in1=all44_random2_R1.fastq in2=all44_random2_R2.fastq out=all44_random2.fastq
+reformat.sh ow=t in1=all44_random729_R1.fastq in2=all44_random729_R2.fastq out=all44_random729.fastq
+reformat.sh ow=t in1=all44_random109_R1.fastq in2=all44_random109_R2.fastq out=all44_random109.fastq
+reformat.sh ow=t in1=all44_random2021_R1.fastq in2=all44_random2021_R2.fastq out=all44_random2021.fastq
+# verify
+reformat.sh in=all44_random1234.fastq vint
+reformat.sh in=all44_random321.fastq vint
+reformat.sh in=all44_random999.fastq vint
+reformat.sh in=all44_random2.fastq vint
+reformat.sh in=all44_random729.fastq vint
+reformat.sh in=all44_random109.fastq vint
+reformat.sh in=all44_random2021.fastq vint
+#--
+#--
+iss generate -g $each -n 2M --cpus 8 --model miseq --output ${BASE}"_2Msimreads_MODELmiseq"; done
+
+#
+#
+# -- Hiseq model
+#
+cd ~/work/dduchen3/projects/HBV/reference/simulated_reads
+for each in ~/work/dduchen3/projects/HBV/reference/all44_refs/individual_refs/*.fasta;
+do export $each; BASE=${each##*/};BASE=${BASE%*.fasta};echo $BASE;
+iss generate -g $each -n 50k --cpus 8 --model hiseq --output ${BASE}"_50ksimreads_MODELhiseq"; done
+#
+#
+cat *MODELhiseq_R1.fastq > HBV_44_Refs_simulated_hiseq_R1.fastq
+cat *MODELhiseq_R2.fastq > HBV_44_Refs_simulated_hiseq_R2.fastq
+#
+rasusa -i HBV_44_Refs_simulated_hiseq_R1.fastq.gz -i HBV_44_Refs_simulated_hiseq_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 1234 -o all44_hiseq_random1234_R1.fastq.gz.fastq -o all44_hiseq_random1234_R2.fastq
+rasusa -i HBV_44_Refs_simulated_hiseq_R1.fastq.gz -i HBV_44_Refs_simulated_hiseq_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 321 -o all44_hiseq_random321_R1.fastq -o all44_random321_R2.fastq
+rasusa -i HBV_44_Refs_simulated_hiseq_R1.fastq.gz -i HBV_44_Refs_simulated_hiseq_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 999 -o all44_hiseq_random999_R1.fastq -o all44_hiseq_random999_R2.fastq
+rasusa -i HBV_44_Refs_simulated_hiseq_R1.fastq.gz -i HBV_44_Refs_simulated_hiseq_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 2 -o all44_hiseq_random2_R1.fastq -o all44_hiseq_random2_R2.fastq
+rasusa -i HBV_44_Refs_simulated_hiseq_R1.fastq.gz -i HBV_44_Refs_simulated_hiseq_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 729 -o all44_hiseq_random729_R1.fastq -o all44_hiseq_random729_R2.fastq
+rasusa -i HBV_44_Refs_simulated_hiseq_R1.fastq.gz -i HBV_44_Refs_simulated_hiseq_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 109 -o all44_hiseq_random109_R1.fastq -o all44_hiseq_random109_R2.fastq
+rasusa -i HBV_44_Refs_simulated_hiseq_R1.fastq.gz -i HBV_44_Refs_simulated_hiseq_R2.fastq.gz --coverage 20000 --genome-size 3.2kb -s 2021 -o all44_hiseq_random2021_R1.fastq -o all44_hiseq_random2021_R2.fastq
+#--
+#
+
+#############################################################################################################
+# Simulate reads from many randomly selected FASTA seqs frin a multi-fasta without the 44 genotype seqs
+#############################################################################################################
+# -- non 44 reference fasta's
+#
+cd ~/work/dduchen3/projects/HBV/reference/allqc_refs
+#--
+interact -m 25GB -t 6:00:00 -p shared
+ml R
+options(stringsAsFactors=F);library(Biostrings)
+ref<-readDNAStringSet("all_HBV_seqs.fasta","fasta")
+# length=3626 for all seqs, alignment file with '-'
+for(i in 1:length(ref)){
+  ref[[i]]<-gsub("-","",ref[[i]])
+}
+#writeXStringSet(ref,'~/work/dduchen3/projects/HBV/reference/allqc_refs/all_HBV_seqs.fasta')
+#
+graph44refs<-readDNAStringSet("~/work/dduchen3/projects/HBV/reference/all44_refs/HBV_ref_sequences_6-30-2020.fasta","fasta")
+remove_seqs<-gsub("^.*_","",names(graph44refs))
+ref_seqs<-gsub("_.*$","",names(ref))
+table(remove_seqs %in% ref_seqs)
+exclude_seqs<-which(ref_seqs %in% remove_seqs)
+non44<-ref[-exclude_seqs,]
+table(remove_seqs %in% gsub("_.*$","",names(non44))) # all missing
+#
+#writeXStringSet(non44,'~/work/dduchen3/projects/HBV/reference/allqc_refs/all_HBV_seqs_no44refs.fasta')
+#
+#
+#
+cd ~/work/dduchen3/projects/HBV/reference/simulated_reads
+cd ~/work/dduchen3/projects/HBV/reference/allqc_refs
+conda activate simulation
+iss generate -g all_HBV_seqs_no44refs.fasta --n_genomes 50 --n_reads 0.5M --seed 321 --cpus 8 --model miseq --output ~/work/dduchen3/projects/HBV/reference/allqc_refs/HBV_no44refs_simreads_MODELmiseq_test
+#--
+# shorter reads (HiSeq model)
+conda activate simulation
+iss generate -g all_HBV_seqs_no44refs_subsampled.fasta --n_reads 0.5M --seed 321 --cpus 8 --model HiSeq --output ~/work/dduchen3/projects/HBV/reference/allqc_refs/HBV_no44refs_simreads_MODELhiseq
+
+#
+#
+# -- combined simulated reads from all B/C genotypes -- #
+cd ~/work/dduchen3/projects/HBV/reference/allqc_refs/indiv_fastq/hiseq_model
+cat *_B_R1*.fastq > geno_BC_R1.fastq
+cat *_C_R1*.fastq >> geno_BC_R1.fastq
+cat *_B_R2*.fastq > geno_BC_R2.fastq
+cat *_C_R2*.fastq >> geno_BC_R2.fastq
+#
+#
+#
+# -- 
+# randomly selected 1 of each genotype with >1 sequence available, not in the graph - then sampled 50 others
+# abundances -
+# ./HBV_no44refs_simreads_MODELhiseq_abundance.txt
+# fasta file of 59 sequences:
+./all_HBV_seqs_no44refs_subsampled.fasta
+# individual fastq files from each of the sequences -
+# ~/work/dduchen3/projects/HBV/reference/allqc_refs/indiv_fastq/hiseq_model
+# variation graph was then created using the fasta files used in the simulation
+
+# variant calling + consensus generation for non44 simulations
+cd /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus
+
+
+
+
+#### ---
+# save to zenodo
+~/work/dduchen3/projects/HBV/reference/allqc_refs/public_avail
+cp ~/work/dduchen3/projects/HBV/reference/allqc_refs/HBV_no44refs_simreads_MODELhiseq* ~/work/dduchen3/projects/HBV/reference/allqc_refs/public_avail/
+cp /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulated_reads/all44_hiseq_random* ~/work/dduchen3/projects/HBV/reference/allqc_refs/public_avail/
+gzip *.fastq
+#
+tar -czvf simulated_HBV_reads.tar.gz ./*

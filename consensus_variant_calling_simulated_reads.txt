@@ -1,0 +1,349 @@
+# results:
+#MARCC
+cd /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus
+#
+## following the same workflow as alignment to linear refs + variant calling + consensus using:
+# - iVar
+# - LoFreq
+############
+# -- Variant calling (Lofreq) followed by consensus generation using the normalized vcf file + relevant reference
+ml samtools
+conda activate lofreq #v. 2.1.5
+# call variants from bam files:
+REFSPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/all44_refs/individual_refs/"
+DATAPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/Longitudinal_CHB_SRP152039/NonSeroconverters/alignment/C4/qc_reads/linear_ref/"
+OUTPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/"
+#ls $REFSPATH*.fasta >HBV_44_refs_paths.txt
+for i in `cat HBV_44_refs_paths.txt`; do export REF="${i##*/}"; #echo $REFSPATH${REF};
+export specificRef=${REF##*Sequence_}; export specificRef=${specificRef%*.fasta};
+cd $OUTPATH;
+echo $specificRef;
+echo "samtools sort, index"
+samtools sort ${DATAPATH}Simulations_non44_hiseq.${specificRef}.bam -O BAM -o ${OUTPATH}Simulations_non44_hiseq.sorted.${specificRef}.bam
+samtools index ${OUTPATH}Simulations_non44_hiseq.sorted.${specificRef}.bam
+echo "LoFreq variant calling"
+lofreq indelqual --dindel -f $REFSPATH${REF} ${OUTPATH}Simulations_non44_hiseq.sorted.${specificRef}.bam -o ${OUTPATH}Simulations_non44_hiseq.lofreq.${specificRef}.bam
+# per lofreq documentation, don't need to also use 'alnqual' command as indel alignment qualities are computed on the fly during variant calling
+samtools sort ${OUTPATH}Simulations_non44_hiseq.lofreq.${specificRef}.bam -O BAM -o ${OUTPATH}Simulations_non44_hiseq_lofreq_${specificRef}.bam ;
+samtools index ${OUTPATH}Simulations_non44_hiseq_lofreq_${specificRef}.bam
+rm  ${OUTPATH}Simulations_non44_hiseq.lofreq.${specificRef}.b*
+outVCF="${REF##HBV_Ref_Sequence_}";outVCF=${outVCF%.fasta}'.vcf'
+cd $OUTPATH;
+lofreq call --call-indels -f $REFSPATH${REF} -o 'Simulations_non44_hiseq_'${outVCF} --verbose ${OUTPATH}Simulations_non44_hiseq_lofreq_${specificRef}.bam
+done
+#
+# Normalize and bgzip the vcf, index, create consensus sequence
+#
+cd /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/
+ml bcftools
+OUTPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/"
+REFSPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/all44_refs/individual_refs/"
+DATAPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/"
+#
+for i in Simulations_non44_hiseq_*.vcf; do export REF="${i#*Simulations_non44_hiseq_}"; echo $REF;
+export REF="${REF%.vcf}";
+cd $OUTPATH;
+bgzip -c $i > $i.gz;
+tabix $i.gz;
+# for non ACTGN bases, provide warning 'w' +skip site? -- approach used for SARS-CoV-2 https://genome.cshlp.org/content/30/12/1781.full
+bcftools norm -c w -f $REFSPATH'HBV_Ref_Sequence_'${REF}'.fasta' -Oz -o $i.norm.gz $i.gz;
+tabix -f $i.norm.gz;
+# Apply those variants observed with AF>=50% to reference to create consensus sequence
+bcftools consensus -i 'INFO/AF>=0.5' -f $REFSPATH'HBV_Ref_Sequence_'${REF}'.fasta' $i.norm.gz > ./bcftools_consensus/Simulations_non44_hiseq_lofreq.${REF}_consensus.fasta;
+done
+#
+############################################
+# Mash distance used to compare things
+# sketch size = 10k, k = 7
+cd /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/
+# 59 seqs: HBV_Genomes_Non44.msh
+#iVar files from: /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/ivar_consensus/ in HBV_simulated_Non44_ivar_mash_comparisons.msh
+# iVar multifasta:
+# ~/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/Simulated_HBV_ivar_multifasta.fasta
+#
+# graph -->
+# surjected into B2_2_GU815637 and then iVar to get consensus
+#
+# to get VG alignment-based consensus:
+ALL44DIR=~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/
+# get B2_2_GU815637.fasta sequence in dir
+vg paths -Fx ${ALL44DIR}HBV_44refs.seqwish_norm.xg -Q B2_2_GU815637 > B2_2_GU815637.fasta
+#
+# giraffe alignment:
+#~/work/dduchen3/projects/HBV/reference/pangenome_ref_tests/pggb_ref/all44_wfmash/Simulations_Non44_HiSeq_giraffe.gam
+i="~/work/dduchen3/projects/HBV/reference/pangenome_ref_tests/pggb_ref/all44_wfmash/Simulations_Non44_HiSeq_giraffe.gam"
+#
+vg augment ${ALL44DIR}HBV_44refs.seqwish_norm.vg $i -A non44_aln_aug.gam > non44_aln_aug.vg
+vg index non44_aln_aug.vg -x non44_aln_aug.xg
+# Compute the read support from the augmented gam (ignoring qualitiy < 5, and 1st and last 5bp of each read)
+vg pack -x non44_aln_aug.xg -g non44_aln_aug.gam -o non44_aln_aug.pack
+# Generate a VCF from the support
+vg call non44_aln_aug.xg -k non44_aln_aug.pack -p B2_2_GU815637 -a -f B2_2_GU815637.fasta > non44_aln_calls.vcf
+ml vcftools;
+bgzip -c non44_aln_calls.vcf > non44_aln_calls.vcf.gz
+tabix -p vcf non44_aln_calls.vcf.gz
+bcftools norm -c w -f B2_2_GU815637.fasta -m-both -Oz -o non44_aln_calls.norm.vcf.gz non44_aln_calls.vcf.gz
+tabix -f non44_aln_calls.norm.vcf.gz
+bcftools consensus -H LA --fasta-ref B2_2_GU815637.fasta non44_aln_calls.norm.vcf.gz -o non44_aln_norm_calls.fasta
+cp non44_aln_norm_calls.fasta non44_aln_norm_calls_LA.fasta
+bcftools consensus -H LR --fasta-ref B2_2_GU815637.fasta non44_aln_calls.norm.vcf.gz -o non44_aln_norm_calls_LR.fasta
+# no difference between LA vs. LR
+ll *.fasta
+done
+# simulated reads underwent variant calling via iVar + LoFreq, with iVar results used.
+#
+# I also tried the ococo tool to generate a consensus on the fly using a surjected bam, ignore
+#
+# MASH comparisons, rewrite:
+cp non44_aln_calls.fa ./linear_alns/ivar_consensus/graph_VG_call_consensus.fasta
+cp non44_aln_norm_calls.fasta ./linear_alns/ivar_consensus/graph_VG_call_consensus_update.fasta
+cp non44_hiseq_giraffe_ivar_consensus.fa ./linear_alns/ivar_consensus/graph_ivar_consensus.fasta
+#
+ls $PWD/linear_alns/ivar_consensus/*.fasta > HBV_simulated_Non44_ivar_files
+ls $PWD/linear_alns/bcftools_consensus/*.fasta > HBV_simulated_Non44_bcftools_files
+
+conda activate pyseer
+#
+mash sketch -o HBV_simulated_Non44_mash_sketch /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/all_HBV_seqs_no44refs_subsampled.fasta -s 10000 -k 7 -g 3k -m 2
+mash sketch -o HBV_simulated_Non44_ivar_mash_comparisons -l HBV_simulated_Non44_ivar_files -s 10000 -k 7
+#mash sketch -o HBV_simulated_Non44_bcftools_mash_comparisons -l SRR7471499_bcftools_files -s 10000 -k 7
+mash paste HBV_simulated_Non44_mash_sketch2 HBV_simulated_Non44_mash_sketch.msh HBV_simulated_Non44_ivar_mash_comparisons.msh
+mash dist HBV_simulated_Non44_mash_sketch2.msh HBV_simulated_Non44_mash_sketch2.msh  > HBV_simulated_Non44_mash_distances.tsv
+#
+setwd("~/JHSPH/Research/HBV/Reference_Testing/simulated_reads_mash/")
+dat<-fread("HBV_simulated_Non44_mash_distances.tsv",sep="\t");dat<-data.frame(dat)
+dat$V1<-gsub("^.*\\/","",dat$V1);dat$V2<-gsub("^.*\\/","",dat$V2)
+dat<-dat[grep("all_HBV_seqs_no44refs_subsampled",dat$V1),]
+dat$comparison<-""
+dat$group<-""
+#dat[grep("bcftools",dat$V2),]$group<-"LoFreq"
+dat[grep("Simulations_non44_hiseq",dat$V2),]$group<-"iVar"
+dat[grep("all_HBV_seqs_no44refs_subsampled",dat$V2),]$group<-"reference"
+dat[grep("graph",dat$V2),]$group<-"graph"
+dat<-dat[-grep("graph_ococo_consensus",dat$V2),]
+#
+dat[which(dat$group %in% c("iVar")),]$comparison<-gsub("^.*hiseq.","",dat[which(dat$group %in% c("iVar")),]$V2)
+dat[which(dat$comparison!=""),]$comparison<-sub("^(\\w).*$", "\\1",dat[which(dat$comparison!=""),]$comparison)
+dat[grep("all_HBV_seqs_no44refs_subsampled",dat$V2),]$comparison<-"Full-length HBV Genomes"
+dat[grep("graph_ivar_consensus",dat$V2),]$comparison<-"VG graph-linear surjection"
+dat[grep("VG_call_consensus.fasta",dat$V2),]$comparison<-"VG graph consensus"
+dat[grep("graph_VG_call_consensus_update.fasta",dat$V2),]$comparison<-"VG graph consensus"
+#
+dat<-dat[dat$group !="reference",]
+dat<-dat[dat$V2 !="graph_VG_call_consensus.fasta",]
+dat<-dat[dat$V2 !="graph_VG_call_consensus.fasta",]
+#
+# remove surjection for now...
+dat<-dat[dat$comparison !="VG graph-linear surjection",]
+#
+library(MetBrewer)
+distances_v_non44genomes<-ggplot(dat,aes(x=V1,y=V3,fill=comparison)) + ylab("Mash Distance: vs. Full-length HBV Genomes") + xlab("") +guides(fill=guide_legend("Consensus/Comparison")) +
+  theme_bw() + geom_dotplot(aes(fill=comparison),dotsize=0.5,color="black", alpha=0.75,binaxis='y',method="histodot",
+                            stackdir='center',position=position_dodge(width=0.1),stackratio=0.5) +
+                            scale_fill_manual(name="",values=c(met.brewer("Egypt", n=15,type="continuous")[c(15:6,1)])) +
+                            theme(axis.title.x=element_blank(),
+                                   axis.text.x=element_blank(),
+                                   axis.ticks.x=element_blank())
+distances_v_non44genomes
+#
+png("MashDistances_iVar_Simulations_05032022.png",type="cairo",width = 5, height = 7, units= 'in', res=1000)
+distances_v_non44genomes
+dev.off()
+#
+
+# if adding lofreq:
+dat_comp<-dat[dat$group %in% c("graph","iVar"),]
+dat_comp$iVar_dist<-dat_comp$V3
+dat_comp$matching<-gsub("^.*_iVar_","",dat_comp$V2)
+dat_comp<-dat_comp[order(dat_comp$matching),]
+dat_comp2<-dat[dat$group %in% c("graph","LoFreq"),]
+dat_comp2$LoFreq_dist<-dat_comp2$V3
+dat_comp2$matching<-gsub("^.*_bcftools_","",dat_comp2$V2)
+dat_comp2<-dat_comp2[order(dat_comp2$matching),]
+all(dat_comp$matching==dat_comp2$matching)
+dat_comp$LoFreq_dist<-dat_comp2$LoFreq_dist
+#
+dat_comp<-dat_comp[-which(dat_comp$comparison %in% c("Gramtools consensus")),]
+#
+distances_v_reads<-ggplot(dat_comp,aes(x=iVar_dist,y=LoFreq_dist)) + geom_point(aes(color=comparison),size=ifelse(dat_comp$group=="graph",5,2.5),alpha=0.5)  +
+              theme_bw() + theme(legend.position="right") + guides(color=guide_legend("Consensus/Comparison"), size = "none") +
+              xlab("iVar Consensus vs. HBV reads\n(Mash distance)") + ylab("LoFreq Consensus vs. HBV reads\n(Mash distance)")
+#
+##################################################
+# --- simulated data from genotypes B/C only --- #
+cd /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/simulated_bc
+ALL44DIR=~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/
+simBC_R1='/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/indiv_fastq/hiseq_model/geno_BC_R1.fastq'
+simBC_R2='/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/indiv_fastq/hiseq_model/geno_BC_R2.fastq'
+REFSPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/all44_refs/individual_refs/"
+OUTPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/simulated_bc/consensus_bc/"
+#
+# call variants from bam files:
+#
+cd $OUTPATH;
+ls ${REFSPATH}HBV_Ref_Sequence_B*.fasta >HBV_BC_refs_paths.txt
+ls ${REFSPATH}HBV_Ref_Sequence_C*.fasta >>HBV_BC_refs_paths.txt
+#
+for i in `cat HBV_BC_refs_paths.txt`; do export REF="${i##*/}"; #echo $REFSPATH${REF};
+export specificRef=${REF##*Sequence_}; export specificRef=${specificRef%*.fasta};
+echo $specificRef;
+echo "samtools index"
+samtools index ../sim_BC_${specificRef}.bam
+done
+#########################
+# variant calling via iVar
+ml bcftools;ml samtools
+conda activate ivar
+BAMPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/simulated_bc/"
+OUTPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/simulated_bc/consensus_bc/"
+cd $OUTPATH;
+#
+for i in `cat HBV_BC_refs_paths.txt`; do export REF="${i##*/}"; #echo $REFSPATH${REF};
+export specificRef=${REF##*Sequence_}; export specificRef=${specificRef%*.fasta};
+echo $specificRef;
+samtools mpileup -aa -A -d 0 -Q 0 ../sim_BC_${specificRef}.bam | ivar consensus -p sim_BC_${specificRef}_ivar_consensus
+done
+#
+###########
+###########
+#
+# graph-based alignment:
+OUTPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/simulated_bc/consensus_bc/"
+cd $OUTPATH;
+#/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/simulated_bc/simBC.gam
+# surjection: best performing linear ref: C2_2_GQ377617
+vg paths -Fx ${ALL44DIR}HBV_44refs.seqwish_norm.xg -Q C2_2_GQ377617 > C2_2_GQ377617.fasta
+#
+i="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/simulated_bc/simBC.gam"
+vg augment ${ALL44DIR}HBV_44refs.seqwish_norm.vg $i -A simBC_aug.gam > simBC_aug.vg
+vg index simBC_aug.vg -x simBC_aug.xg
+# Compute the read support from the augmented gam (ignoring qualitiy < 5, and 1st and last 5bp of each read)
+vg pack -x simBC_aug.xg -g simBC_aug.gam -o simBC_aug.pack
+# Generate a VCF from the support
+vg call simBC_aug.xg -k simBC_aug.pack -p C2_2_GQ377617 -a -f C2_2_GQ377617.fasta > simBC_calls.vcf
+ml vcftools;
+bgzip -c simBC_calls.vcf > simBC_calls.vcf.gz
+tabix -p vcf simBC_calls.vcf.gz
+bcftools norm -c w -f C2_2_GQ377617.fasta -m-both -Oz -o simBC_calls.norm.vcf.gz simBC_calls.vcf.gz
+tabix -f simBC_calls.norm.vcf.gz
+bcftools consensus -H LR --fasta-ref C2_2_GQ377617.fasta simBC_calls.norm.vcf.gz -o simBC_calls_norm.fasta
+bcftools consensus -H LA --fasta-ref C2_2_GQ377617.fasta simBC_calls.norm.vcf.gz -o simBC_calls_norm_LA.fasta
+ll *.fasta
+done
+# LR is better
+#############################
+# MASH comparisons
+# reference genomes - B/C only:
+cat $(grep -v '^#' HBV_BC_refs_paths.txt) > HBV_BC_refs.fasta
+#
+vg paths -Fx ${ALL44DIR}HBV_44refs.seqwish_norm.xg -Q C2_2_GQ377617 > C2_2_GQ377617.fasta
+#
+#mkdir ivar_consensus
+cp *consensus.fa ./ivar_consensus/
+ls $PWD/ivar_consensus/*.fa > HBV_simulated_BC_ivar_files
+ls $PWD/simBC_calls_norm.fasta >> HBV_simulated_BC_ivar_files
+#
+conda activate pyseer
+#
+mash sketch -o HBV_BC_genomes /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/allqc_refs/simulated_bc/consensus_bc/HBV_BC_refs.fasta -s 10000 -k 7 -g 3k
+#cat $simBC_R1 $simBC_R2 > simBC_reads.fastq
+mash sketch -o HBV_BC_reads simBC_reads.fastq -s 10000 -k 7 -g 3k
+mash sketch -o HBV_simulated_BC_ivar_mash_comparisons -l HBV_simulated_BC_ivar_files -s 10000 -k 7
+mash paste HBV_BC_mash_sketch HBV_BC_reads.msh HBV_BC_genomes.msh HBV_simulated_BC_ivar_mash_comparisons.msh
+mash paste HBV_BC_mash_sketch_ReadsOnly HBV_BC_reads.msh HBV_simulated_BC_ivar_mash_comparisons.msh
+mash dist HBV_BC_mash_sketch.msh HBV_BC_mash_sketch.msh  > HBV_BC_mash_distances.tsv
+mash dist HBV_BC_mash_sketch_ReadsOnly.msh HBV_BC_mash_sketch_ReadsOnly.msh  > HBV_BC_mash_reads_distances.tsv
+#
+setwd("~/JHSPH/Research/HBV/Reference_Testing/simulated_reads_mash/")
+#dat<-fread("HBV_BC_mash_reads_distances.tsv",sep="\t");dat<-data.frame(dat)
+dat<-fread("HBV_BC_mash_distances.tsv",sep="\t");dat<-data.frame(dat)
+dat$V1<-gsub("^.*\\/","",dat$V1);dat$V2<-gsub("^.*\\/","",dat$V2)
+#dat<-dat[grep("simBC_reads",dat$V1),]
+dat<-dat[grep("HBV_BC_refs",dat$V1),]
+dat$comparison<-gsub("sim_BC_","",dat$V2)
+dat$comparison<-gsub("_.*$","",dat$comparison)
+dat$comparison[grep("_ivar_consensus",dat$V2)]<-sub("^(\\w).*$", "\\1", dat$comparison[grep("_ivar_consensus",dat$V2)])
+dat$comparison[grep("fastq",dat$V2)]<-"Simulated reads: B/C"
+dat$comparison[grep("HBV_BC_refs.fasta",dat$V2)]<-"HBV genomes: B/C"
+dat$comparison[grep("simBC_calls_norm",dat$V2)]<-"VG alignment consensus"
+#
+library(MetBrewer)
+distances_v_bc_genomes_zoom<-ggplot(dat[dat$V3>0.05,],aes(x=V1,y=V3,fill=comparison)) + ylab("") +
+  xlab("") +guides(fill=guide_legend("Consensus/Comparison")) +
+  theme_bw() + geom_dotplot(aes(fill=comparison),dotsize=0.5,color="black", alpha=0.75,binaxis='y',method="histodot",
+                            stackdir='center',position=position_dodge(width=0.1),stackratio=0.85) +
+                            scale_fill_manual(name="",values=c(met.brewer("Egypt", n=4,type="continuous"))[c(1,2,3)]) +
+                            theme(axis.title.x=element_blank(),
+                                   axis.text.x=element_blank(),
+                                   axis.ticks.x=element_blank()) +
+                            theme(legend.position="none") +
+                            scale_y_continuous(position = "right")
+distances_v_bc_genomes_zoom
+#
+distances_v_bc_genomes_full<-ggplot(dat[dat$V3>0,],aes(x=V1,y=V3,fill=comparison)) + ylab("Mash Distance: vs. Full-length HBV Genomes\nGenotypes B/C") +
+  xlab("") +guides(fill=guide_legend("Consensus/Comparison")) +
+  theme_bw() + geom_dotplot(aes(fill=comparison),dotsize=0.5,color="black", alpha=0.75,binaxis='y',method="histodot",
+                            stackdir='center',position=position_dodge(width=0.1),stackratio=0.5) +
+                            scale_fill_manual(name="",values=c(met.brewer("Egypt", n=4,type="continuous"))[c(1,2,4,3)]) +
+                            theme(axis.title.x=element_blank(),
+                                   axis.text.x=element_blank(),
+                                   axis.ticks.x=element_blank())
+distances_v_bc_genomes_full
+#
+pl2<-distances_v_bc_genomes_full + distances_v_bc_genomes_zoom + plot_layout(ncol = 2,widths=c(0.5,0.5))
+#
+png("MashDistances_iVar_Simulations_genoBC_05032022.png",type="cairo",width = 8, height = 7, units= 'in', res=1000)
+pl2
+dev.off()
+#
+distances_v_bc_genomes_zoom<-distances_v_bc_genomes_zoom +
+          ylab("Mash Distance: vs. Full-length HBV Genomes\nGenotypes B/C") +
+          theme(legend.position="right") +
+          scale_y_continuous(position = "left")
+#
+png("MashDistances_iVar_Simulations_genoBC_zoom_05312022.png",type="cairo",width = 5, height = 7, units= 'in', res=1000)
+distances_v_bc_genomes_zoom
+dev.off()
+#
+#
+# Average nucleotide diversity
+dat$ani<-(1-dat$V3)*100
+
+
+
+
+
+
+
+
+#############################
+echo "LoFreq variant calling"
+lofreq indelqual --dindel -f $REFSPATH${REF} ${OUTPATH}Simulations_non44_hiseq.sorted.${specificRef}.bam -o ${OUTPATH}Simulations_non44_hiseq.lofreq.${specificRef}.bam
+# per lofreq documentation, don't need to also use 'alnqual' command as indel alignment qualities are computed on the fly during variant calling
+samtools sort ${OUTPATH}Simulations_non44_hiseq.lofreq.${specificRef}.bam -O BAM -o ${OUTPATH}Simulations_non44_hiseq_lofreq_${specificRef}.bam ;
+samtools index ${OUTPATH}Simulations_non44_hiseq_lofreq_${specificRef}.bam
+rm  ${OUTPATH}Simulations_non44_hiseq.lofreq.${specificRef}.b*
+outVCF="${REF##HBV_Ref_Sequence_}";outVCF=${outVCF%.fasta}'.vcf'
+cd $OUTPATH;
+lofreq call --call-indels -f $REFSPATH${REF} -o 'Simulations_non44_hiseq_'${outVCF} --verbose ${OUTPATH}Simulations_non44_hiseq_lofreq_${specificRef}.bam
+done
+#
+# Normalize and bgzip the vcf, index, create consensus sequence
+#
+cd /home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/
+ml bcftools
+OUTPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/"
+REFSPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/all44_refs/individual_refs/"
+DATAPATH="/home-1/dduchen3@jhu.edu/work/dduchen3/projects/HBV/reference/simulations_consensus/linear_alns/"
+#
+for i in Simulations_non44_hiseq_*.vcf; do export REF="${i#*Simulations_non44_hiseq_}"; echo $REF;
+export REF="${REF%.vcf}";
+cd $OUTPATH;
+bgzip -c $i > $i.gz;
+tabix $i.gz;
+# for non ACTGN bases, provide warning 'w' +skip site? -- approach used for SARS-CoV-2 https://genome.cshlp.org/content/30/12/1781.full
+bcftools norm -c w -f $REFSPATH'HBV_Ref_Sequence_'${REF}'.fasta' -Oz -o $i.norm.gz $i.gz;
+tabix -f $i.norm.gz;
+# Apply those variants observed with AF>=50% to reference to create consensus sequence
+bcftools consensus -i 'INFO/AF>=0.5' -f $REFSPATH'HBV_Ref_Sequence_'${REF}'.fasta' $i.norm.gz > ./bcftools_consensus/Simulations_non44_hiseq_lofreq.${REF}_consensus.fasta;
+done
