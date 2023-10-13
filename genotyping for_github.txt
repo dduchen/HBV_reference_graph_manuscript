@@ -1,0 +1,505 @@
+#################################################################################
+#################################################################################
+# HBV genotyping via alignment
+#################################################################################
+#################################################################################
+#-- MARCC
+cd ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref
+#--
+pggb_refdir=~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/
+genbank_fastas=~/work/dduchen3/projects/HBV/HBV_genomicdistance/clear_ALLgenbankHBVsequences_03312021.fasta
+cleaned_fastas=~/work/dduchen3/projects/HBV/HBV_genomicdistance/clear_HBV_stripped_McNaughton2019.fasta
+#--
+# - edit
+-k: minimum MEM length [0]. set to 20+?
+-B: consider this many alignments of each band in banded alignment [16] - set very high - 1024 from https://github.com/vgteam/vg/issues/679
+# long settings: '-u 2 -L 63 -q 1 -z 2 -o 2 -y 1 -w 128 -O 32`
+# if the read is much longer than -w, it chops it up into -w sized chunks, aligns each chunk, and then tries to stitch the results together into something coherent.
+#
+#######################################################
+# KJ173285_C # mismatched to A
+# FJ692592_A # mismatched to D
+# alter alignment method
+
+# -- use pggb graph
+cd ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/pggb_assessment
+# screen --> interact -m 50GB -t 48:00:00 -p shared
+#--------------
+# OLD MINWISH results saved: ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/pggb_assessment/edyeetpggb_graph_assessments.tar.gz
+# updated wfmash pggb graph
+pggb_refdir=~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/
+genbank_fastas=~/work/dduchen3/projects/HBV/HBV_genomicdistance/clear_ALLgenbankHBVsequences_03312021.fasta
+cleaned_fastas=~/work/dduchen3/projects/HBV/HBV_genomicdistance/clear_HBV_stripped_McNaughton2019.fasta
+#--
+# - parameters
+# -k: minimum MEM length [0]. set to 20+?
+# -B: consider this many alignments of each band in banded alignment [16] - could set very high - 1024 from https://github.com/vgteam/vg/issues/679
+# long settings: '-u 2 -L 63 -q 1 -z 2 -o 2 -y 1 -w 128 -O 32`
+# if the read is much longer than -w, it chops it up into -w sized chunks, aligns each chunk, and then tries to stitch the results together into something coherent.
+#
+# multipath option?
+#~/work/dduchen3/tools/vg mpmap -x $graphdir'HBV_44refs.seqwish_norm.xg' -g $graphdir'HBV_44refs.seqwish_norm.gcsa' -d $graphdir'HBV_44refs.seqwish_norm.dist' -n DNA -l long -f $DATAPATH${FNAME} -f $DATAPATH${FNAME%_1_qc.fastq}"_2_qc.fastq" -F GAM > cleaned_HBV_Genotypes_pggb_wfmash_mpmap.gam
+#
+~/work/dduchen3/tools/vg map -x $pggb_refdir'HBV_44refs.seqwish_norm.xg' -g $pggb_refdir'HBV_44refs.seqwish_norm.gcsa' -F $cleaned_fastas -k 22 -u 2 -L 63 -q 1 -z 2 -o 2 -y 1 -w 128 -O 32  > cleaned_HBV_Genotypes_pggb_wfmash.gam
+# sort and index:
+~/work/dduchen3/tools/vg gamsort -p cleaned_HBV_Genotypes_pggb_wfmash.gam > cleaned_HBV_Genotypes_pggb_wfmash.sorted.gam
+~/work/dduchen3/tools/vg index -l cleaned_HBV_Genotypes_pggb_wfmash.sorted.gam
+
+cleaned_HBV_Genotypes_pggb_wfmash.sorted.gam.gai
+
+#####
+# -- local surjection of each sequence into each path, extracting % identity/alignment score
+# normalized PGGB-wfmash seqwish graph:
+for ref in $(~/work/dduchen3/tools/vg paths -Lx  $pggb_refdir'HBV_44refs.seqwish_norm.xg')
+    do ( ~/work/dduchen3/tools/vg surject -x $pggb_refdir'HBV_44refs.seqwish_norm.xg' -l -p $ref cleaned_HBV_Genotypes_pggb_wfmash.gam | ~/work/dduchen3/tools/vg view -a -j - \
+        | jq -cr '[.name, "'$ref'", .score]' | sed s/null/0/g | jq -cr @tsv ) | gzip >cleaned_HBV_surj.$ref.wfmashpggb.local.tsv.gz
+done
+#C4_KF873526 failed, out of range error - use sorted/indexed gamfile
+ref=C4_KF873526
+~/work/dduchen3/tools/vg surject -x $pggb_refdir'HBV_44refs.seqwish_norm.xg' -l -p $ref cleaned_HBV_Genotypes_pggb_wfmash.sorted.gam | ~/work/dduchen3/tools/vg view -a -j - | jq -cr '[.name, "'$ref'", .score]' | sed s/null/0/g | jq -cr @tsv | gzip >cleaned_HBV_surj.$ref.wfmashpggb.local.tsv.gz
+# -- combine into one big table and assess
+# list of paths:
+#~/work/dduchen3/tools/vg paths -Lx  $pggb_refdir'HBV_44refs.seqwish_norm.xg' > ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/pggb_assessment/paths.txt
+ml R
+R
+options(stringsAsFactors=F)
+library(data.table)
+# cbind
+paths<-fread("~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/pggb_assessment/paths.txt",header=F)
+test<-fread("cleaned_HBV_surj.A1_1_KP168423.wfmashpggb.local.tsv.gz")
+results_mapping_score <- data.frame(matrix(ncol = nrow(paths), nrow = nrow(test)))
+colnames(results_mapping_score) <- c(paths$V1)
+rownames(results_mapping_score) <- test$V1
+#--
+library(dplyr)
+for(i in 1:nrow(paths)){
+  ref<-paths[i]
+  tmp<-fread(paste0("cleaned_HBV_surj.",ref,".wfmashpggb.local.tsv.gz"))
+  ref_path<-unique(tmp$V2)
+# ensure correct order
+  tmp<-tmp[match(rownames(results_mapping_score), tmp$V1),]
+  print(paste0(ref_path," reference mapping, correct order?: ",all(tmp$V1==rownames(results_mapping_score))))
+  results_mapping_score[,ref_path]<-tmp$V3
+}
+results_mapping_score$truth<-gsub("^.*_","",rownames(results_mapping_score))
+results_mapping_score$best_ref<-"NA"
+for(i in 1:nrow(results_mapping_score)){
+  tmp<-results_mapping_score[i,]
+  best<-substr(colnames(tmp)[which.max(tmp)[[1]]],1,1) # extract first character - to the first character of the columnname with the best match
+  results_mapping_score[i,]$best_ref<-best
+}
+#-- remove rows with genomes which were removed:
+results_mapping_score<-results_mapping_score[-grep("removed",rownames(results_mapping_score)),]
+#
+table(results_mapping_score$truth,results_mapping_score$truth==results_mapping_score$best_ref)
+#     A    B    C    D    E    F    G    H    I
+#A  259    0    0    0    0    0    0    0    0
+#B    0  687    0    0    0    0    0    0    0
+#C    0    0 1094    0    0    0    0    0    0
+#D    0    0    0  549    0    0    0    0    0
+#E    0    0    0    0  145    0    0    0    0
+#F    0    0    0    0    0   80    0    0    0
+#G    0    0    0    0    0    0    3    0    0
+#H    0    0    0    0    0    0    0   11    0
+#I    0    0    0    0    0    0    0    0    9
+#
+#fwrite(results_mapping_score,file="McNaughton_HBVseqs_44refs_pggb_wfmash_score_results.txt",sep="\t",row.names=T,col.names=T,quote=F)
+####################################################################################################
+############################# -- short read-based alignment scoring -- #############################
+# use:
+# simulated reads
+# BBNORM subsample to 10k
+# Packed graph + Path info
+# # -- use a normalized gfa file
+cd ~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/
+############################################################################################
+# ~/work/dduchen3/tools/vg convert -v HBV_44refs.seqwish_norm.vg -V -f > HBV_44refs.seqwish_norm.gfa
+# 'P' lines of  GFA file = paths with nodes, so extract these lines of gfa file (checked the nodes matched correctly with test1_aln.svg)
+#sed -n '/^#1:/p;/^P/p' HBV_44refs.seqwish_norm.gfa > HBV_44refs.seqwish_norm.pathnodes
+############################################################################################
+cd ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/short_reads
+graph=~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/HBV_44refs.seqwish_norm
+# can get nodes within each path from original gfa file:
+~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/HBV_44refs.seqwish_norm.pathnodes
+### JHPCE:
+R
+dat<-fread("~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/HBV_44refs.seqwish_norm.pathnodes",header=F)
+dat<-dat[,c(2,3)]
+dat$V3<-gsub("\\+","",dat$V3)
+dat$V3<-gsub("\\-","",dat$V3)
+#--
+hbv44ref<-as.list(unique(dat$V2))
+names(hbv44ref)<-hbv44ref
+#-- for each reference (names), entries are all nodes
+for(i in 1:length(unique(dat$V2))){
+  nodes<-as.numeric(strsplit(dat[i,]$V3,split=",")[[1]])
+  hbv44ref[[i]]<-nodes
+}
+str(hbv44ref)
+#MARCC:
+setwd("~/work/dduchen3/projects/HBV/genotyping/pangenome_ref")
+#######################################################################
+save(hbv44ref,file="HBV_44Refs_pggbwfmash_norm_Path_Specific_Nodes.R")
+#######################################################################
+# HBV_44Refs_pggbwfmash_norm_Path_Specific_Nodes.R -- list object with nodes within each graph
+#######################################################################
+load("HBV_44Refs_pggbwfmash_norm_Path_Specific_Nodes.R")
+# Node weights - based on all 44, each genotype
+total_nodes<-as.vector(NULL)
+for(i in 1:length(hbv44ref)){
+    # Want unique nodes traversed by each path - can traverse same node multiple times
+    total_nodes<-c(total_nodes,as.character(unique(hbv44ref[[i]])))
+}
+total_nodes<-table(total_nodes) # repeat for more intuitive plot
+node_dat<-data.frame(table(total_nodes))
+node_dat$nodes<-as.numeric(node_dat$total_nodes)
+path_specific_nodes_hist_wfmash<-ggplot(data=node_dat,aes(x=nodes,y=Freq,fill=nodes)) + geom_bar(stat="identity") + xlab("Number of Paths/Node") + ylab("N") +
+  scale_fill_gradient(name = '',low="darkblue",high="red") + theme(legend.direction = 'horizontal', legend.position = 'bottom') +
+  theme_bw() + theme(legend.position="none")
+#
+#png("~/JHSPH/Research/HBV/Reference_Testing/path_specific_nodes_hist_wfmash.png",type="cairo",width = 4, height = 5, units= 'in', res=1000)
+path_specific_nodes_hist_wfmash
+dev.off()
+# color by scaled weight estimated below
+#
+# total_nodes -> for each node, how many paths have it (range from 1-44)
+hist(total_nodes)
+plot(total_nodes)
+#total_nodes<-table(total_nodes)
+# total_nodes -> the number of nodes specific to each number of paths/strains. ex. 365 nodes in all 44. 858 nodes only in 1 path.
+plot(total_nodes)
+#
+# - low/high extremes = The reference graph nodes tend to be either unique to specific paths/reference sequences or shared across many paths (peaks at 1 and 44)
+#
+# bimodal distribution of nodes observed in paths - many unique to certain paths/ many shared across most, not many in middle
+# - make lower values weighted more + normalize
+total_nodes_wt<-44/total_nodes # max num. of shared nodes=44 --> downweight to 1
+total_nodes_wt = (total_nodes_wt-min(total_nodes_wt))/(max(total_nodes_wt)-min(total_nodes_wt))
+#            node: 1  2  3  4  5  6
+#    shared paths: 5    39    10    44 22    44
+# inverted weight: 8.8  1.13  4.4   1  1.05  1
+#      scaled 0-1: 0.18 0.003 0.079 0  0.001 0
+node_weights<-data.frame(total_nodes_wt)
+colnames(node_weights)<-c("node","weight")
+all(names(total_nodes)==node_weights$node) # TRUE
+node_weights$paths<-total_nodes
+node_weights$unscaled_weight<-44/node_weights$paths
+# plot them to see distribution
+library(ggplot2);library(viridis)
+library(MetBrewer)
+p<-ggplot(data=node_weights,aes(x=paths,y=weight)) + geom_point(aes(color=weight)) +
+    xlab("Path Depth") + ylab("Node Weight") +
+    scale_color_gradientn(name = 'Scaled Weight',trans="pseudo_log",colors = met.brewer("Egypt",n=15,type="continuous")) +
+    theme(legend.direction = 'horizontal', legend.position = 'bottom') +
+    theme_bw()
+# local:
+#png("~/JHSPH/Research/HBV/Reference_Testing/Node_Weighting_Scheme_44RefGraph_pggb_wfmash.png",type="cairo",width = 7, height = 4, units= 'in', res=1000)
+p
+dev.off()
+node_weights$node2<-as.numeric(as.character(node_weights$node))
+node_weights<-node_weights[order(node_weights$node2),]
+node_weights$node<-node_weights$node2
+node_weights$node2<-NULL
+#
+#fwrite(node_weights,file="HBV_44Refs_pggbwfmash_norm_NodeWeightsPaths_Reference.csv",quote=F,sep=",",col.names=T,row.names=F)
+##############
+# remake distribution but use scaled weights as color/fill
+node_weights_forplot<-node_weights[order(node_weights$paths),]
+node_weights_forplot<-node_weights_forplot[!duplicated(node_weights_forplot$paths),]
+all(node_weights_forplot$paths==node_dat$nodes)
+# TRUE
+node_dat$weight<-node_weights_forplot$weight
+#
+path_specific_nodes_hist_wfmash2<-ggplot(data=node_dat,aes(x=nodes,y=Freq,fill=weight)) + geom_bar(stat="identity") +
+  xlab("Path Depth") + ylab("Nodes (N)") +
+  theme(legend.direction = 'horizontal', legend.position = 'bottom') +
+  scale_fill_gradientn(name = 'Scaled Weight',trans="pseudo_log",colors = met.brewer("Egypt",n=15,type="continuous")) +
+  theme_bw() #+ theme(legend.position="none")
+#
+png("~/JHSPH/Research/HBV/Reference_Testing/path_specific_nodes_hist_wfmas_weights.png",type="cairo",width = 7, height = 4, units= 'in', res=1000)
+path_specific_nodes_hist_wfmash2
+dev.off()
+
+#--
+# create new list containing reference, nodes, and weights
+hbv_44ref_complete<-as.list(names(hbv44ref))
+names(hbv_44ref_complete)<-names(hbv44ref)
+for(i in 1:length(hbv44ref)){
+  ref<-names(hbv44ref)[i]
+  tmp.weights<-node_weights[hbv44ref[[i]],]$weight
+  all(node_weights[hbv44ref[[i]],]$node==hbv44ref[[i]]) #must be TRUE - mapping correct
+  hbv_44ref_complete[[i]]<-list("nodes"=hbv44ref[[i]],"weights"=node_weights[hbv44ref[[i]],]$weight)
+}
+#--
+##################################################################
+# save(node_weights,hbv_44ref_complete,file="HBV_44Refs_pggb_wfmash_norm_Path_Specific_Nodes_wWeights.R")
+# load("~/JHSPH/Research/HBV/Reference_Testing/HBV_44Refs_pggb_wfmash_norm_Path_Specific_Nodes_wWeights.R")
+# load("/Data/HBV/reference/genotyping/HBV_44Refs_pggb2500seqwish_Path_Specific_Nodes_wWeights.R")
+##################################################################
+cd ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/short_reads
+pggb_refdir=~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/
+# subsample simulated reads:
+# A1_1_KP168423
+a_r1=~/work/dduchen3/projects/HBV/reference/simulated_reads/HBV_Ref_Sequence_A1_1_KP168423_2Msimreads_MODELmiseq_R1.fastq.gz
+a_r2=~/work/dduchen3/projects/HBV/reference/simulated_reads/HBV_Ref_Sequence_A1_1_KP168423_2Msimreads_MODELmiseq_R2.fastq.gz
+ml bbmap
+#bbnorm.sh in=$a_r1 in2=$a_r2 out=A1_1_KP168423_5k_R1.fastq out2=A1_1_KP168423_5k_R2.fastq target=5000
+#
+# -- map -- #
+~/work/dduchen3/tools/vg map -x $pggb_refdir'HBV_44refs.seqwish_norm.xg' -g $pggb_refdir'HBV_44refs.seqwish_norm.gcsa' -f A1_1_KP168423_5k_R1.fastq -f A1_1_KP168423_5k_R2.fastq > A1_1_KP168423_5k_wfmash.gam
+# should also compute pack etc. using map... but giraffe works
+~/work/dduchen3/tools/vg giraffe -Z $pggb_refdir'HBV_44refs.seqwish_norm.giraffe.gbz' -H $pggb_refdir'HBV_44refs.seqwish_norm.augmented.gbwt' -m $pggb_refdir'HBV_44refs.seqwish_norm.min' -d $pggb_refdir'HBV_44refs.seqwish_norm.dist' -f A1_1_KP168423_5k_R1.fastq -f A1_1_KP168423_5k_R2.fastq -o gam -p > A1_1_KP168423_5k_wfmash_giraffe.gam
+#
+# all reads aligned successfully
+# Compute the support using packed graph
+~/code/dduchen_tools/vg pack -x $pggb_refdir'HBV_44refs.seqwish_norm.xg' -g A1_1_KP168423_5k_wfmash_giraffe.gam -o A1_1_KP168423_5k_wfmash_giraffe.pack
+~/code/dduchen_tools/vg pack -x $pggb_refdir'HBV_44refs.seqwish_norm.xg' -i A1_1_KP168423_5k_wfmash_giraffe.pack -d >A1_1_KP168423_5k_wfmash_giraffe_coverage.tsv   # a table representing per-bp coverage
+~/code/dduchen_tools/vg pack -x $pggb_refdir'HBV_44refs.seqwish_norm.xg' -i A1_1_KP168423_5k_wfmash_giraffe.pack -D >A1_1_KP168423_5k_wfmash_giraffe_edge.tsv   # a table with edge coverage - from-to nodes
+# The node is stored by ID, and the offset is 0-based and counts from the start of the node in the specified orientation
+# -- R
+setwd("~/JHSPH/Research/HBV/Reference_Testing/mapping")
+load("../HBV_44Refs_pggb_wfmash_norm_Path_Specific_Nodes_wWeights.R")
+node_weights$node<-as.numeric(as.character(node_weights$node))
+node_weights<-node_weights[order(node_weights$node),]
+dat<-fread("A1_1_KP168423_5k_wfmash_giraffe_coverage.tsv")
+# base-level coverage - get median coverage/node
+require(plyr)
+datsum<-ddply(dat, c("node.id"), summarise,
+               bplen    = length(node.id),
+               median = median(coverage),
+               mean = mean(coverage),
+               sd   = sd(coverage))
+#-- add the calculated 'weight' for each node
+all(node_weights$node==datsum$node.id)# TRUE
+datsum$node.weight<-node_weights$weight
+#
+# predict path based on node+path coverage for each reference?
+predict<-hbv_44ref_complete
+# for each ref in hbv_44ref_complete - extract nodes with coverage>1000
+mapped<-as.character(datsum[datsum$median>1000,]$node.id) #should explore how low/high can go
+map_summary<-data.frame()
+for(i in 1:length(predict)){
+  ref<-names(predict[i])
+  mapped_nodes<-mapped[which(mapped %in% as.character(predict[[i]]$nodes))]
+  print(paste0(ref,": ",sum(datsum[datsum$node.id %in% mapped_nodes,]$bplen),"bp mapped"))
+  print(paste0(ref,": ",sum(datsum[datsum$node.id %in% mapped_nodes,]$node.weight)," weighted score"))
+  a<-ref
+  b<-sum(datsum[datsum$node.id %in% mapped_nodes,]$bplen)
+  c<-sum(datsum[datsum$node.id %in% mapped_nodes,]$node.weight)
+  map_summary<- rbind(map_summary,c(a,b,c))
+}
+colnames(map_summary)<-c("Reference_Path","Mapped_BP","Weighted_Score")
+# works - A1_1_KP168423 has by far the best weighted score!
+#fwrite(map_summary,file="A1_1_KP168423_5k_wfmash_norm_giraffe_mapping_assessment.txt",quote=F,col.names=T,row.names=F,sep="\t")
+#
+# -- go from read files to packed graph:
+#-- automate this
+#
+pggb_refdir=~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_pggb/
+cd ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/short_reads/non_44refs
+# miseq model:
+#datadir=~/work/dduchen3/projects/HBV/reference/allqc_refs/indiv_fastq/
+# -- run for 50 seqs, results moved to: ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/short_reads/non_44refs/miseq_model_alns/
+# hiseq model:
+datadir=~/work/dduchen3/projects/HBV/reference/allqc_refs/indiv_fastq/hiseq_model/
+#for i in `cat ~/work/dduchen3/projects/HBV/reference/allqc_refs/indiv_fastq/sample_ids.txt`; do echo $i;
+for i in `cat ~/work/dduchen3/projects/HBV/reference/allqc_refs/indiv_fastq/non44_hiseq_sample_ids.txt`; do echo $i;
+~/work/dduchen3/tools/vg giraffe -Z $pggb_refdir'HBV_44refs.seqwish_norm.giraffe.gbz' -H $pggb_refdir'HBV_44refs.seqwish_norm.augmented.gbwt' -m $pggb_refdir'HBV_44refs.seqwish_norm.min' -d $pggb_refdir'HBV_44refs.seqwish_norm.dist' -f ${datadir}$i\_R1.fastq -f ${datadir}$i\_R2.fastq -o gam > $i\_giraffe.gam
+# Compute the support using packed graph
+~/code/dduchen_tools/vg pack -x $pggb_refdir'HBV_44refs.seqwish_norm.xg' -g $i\_giraffe.gam -o $i\_giraffe.pack
+~/code/dduchen_tools/vg pack -x $pggb_refdir'HBV_44refs.seqwish_norm.xg' -i $i\_giraffe.pack -d >$i\_giraffe_coverage.tsv
+rm $i\_giraffe.gam;rm $i\_giraffe.pack
+done
+#
+# Parse results
+########################################################
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(plyr))
+options(stringsAsFactors=F)
+best_ref <- function(input_tsv){
+load("~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/HBV_44Refs_pggb_wfmash_norm_Path_Specific_Nodes_wWeights.R")
+# load appropriate alignment files
+dat<-fread(input=input_tsv) # more sequence mapped to graph, use mpmap
+#
+# base-level coverage - get median coverage/node
+datsum<-ddply(dat, c("node.id"), summarise,
+               bplen    = length(node.id),
+               median = median(coverage),
+               mean = mean(coverage),
+               sd   = sd(coverage))
+#-- add the calculated 'weight' for each node
+node_weights<-node_weights[order(node_weights$node),]
+datsum<-datsum[order(datsum$node.id),]
+if(all(node_weights$node==datsum$node.id)){
+#	print("Reference graph nodes match alignment nodes")
+	datsum$node.weight<-node_weights$weight
+	predict<-hbv_44ref_complete
+	mapped<-as.character(datsum[datsum$median>0,]$node.id)
+	map_summary<-data.frame()
+	for(i in 1:length(predict)){
+		ref<-names(predict[i])
+		mapped_nodes<-mapped[which(mapped %in% as.character(predict[[i]]$nodes))]
+		#print(paste0(ref,": ",sum(datsum[datsum$node.id %in% mapped_nodes,]$bplen),"bp mapped"))
+		#print(paste0(ref,": ",sum(datsum[datsum$node.id %in% mapped_nodes,]$node.weight)," weighted score"))
+		a<-ref
+		b<-sum(datsum[datsum$node.id %in% mapped_nodes,]$bplen)
+		c<-sum(datsum[datsum$node.id %in% mapped_nodes,]$node.weight)
+		map_summary<- rbind(map_summary,c(a,b,c))
+		}
+	colnames(map_summary)<-c("Reference_Path","Mapped_BP","Weighted_Score")
+	map_summary[,2]<-as.numeric(map_summary[,2]);map_summary[,3]<-as.numeric(map_summary[,3])
+# save output, then forward best ref to stdout
+  fwrite(map_summary,file=paste0(gsub("_coverage.tsv","",input_tsv),"_44ref_AlnSummary.txt"),sep="\t",col.names=T,row.names=F,quote=F)
+  return(cat(map_summary[map_summary$Weighted_Score==max(map_summary$Weighted_Score),]$Reference_Path))} else {
+	return(cat("Reference graph nodes do not match alignment nodes, did you use graph/index from:
+  HBV_44refs.seqwish_norm"))}
+}
+######################################################################################################
+# Iterate through each file
+for(i in list.files(pattern="_coverage.tsv")){
+print(paste0("<----- Best reference path for: ",gsub("_giraffe_coverage.tsv","",i)),best_ref(i))
+}
+######################################################################################################
+summary_results<-fread("KU963901_C_giraffe_44ref_AlnSummary.txt")
+summary_results$query_seq<-NA
+summary_results<-summary_results[0,]
+#
+for(i in list.files(pattern="giraffe_44ref_AlnSummary.txt")){
+  paste(i)
+  dat<-fread(i)
+  dat$query_seq<-gsub("_giraffe_44ref_AlnSummary.txt","",i)
+  dat<-dat[dat$Weighted_Score==max(dat$Weighted_Score),]
+  summary_results<-rbind(summary_results,dat)
+}
+summary_results$truth<-gsub("^.*_","",summary_results$query_seq)
+summary_results$best_ref<-substr(summary_results$Reference_Path,1,1)
+table(summary_results$truth,summary_results$best_ref)
+##################
+#   A  B  C  D  E  F  G  H  I
+#A  7  0  0  0  0  0  0  0  0
+#B  0 17  0  0  0  0  0  0  0
+#C  0  0 19  0  0  0  0  0  0
+#D  0  0  0  9  0  0  0  0  0
+#E  0  0  0  0  2  0  0  0  0
+#F  0  0  0  0  0  2  0  0  0
+#G  0  0  0  0  0  0  1  0  0
+#H  0  0  0  0  0  0  0  1  0
+#I  0  0  0  0  0  0  0  0  1
+#
+###################
+#fwrite(summary_results,file="GiraffeMapping_SummaryResults_50NonRefs.txt",quote=F,col.names=T,row.names=F,sep="\t")
+fwrite(summary_results,file="GiraffeMapping_SummaryResults_HiSeq_59NonRefs.txt",quote=F,col.names=T,row.names=F,sep="\t")
+# Reads simulated from 50 HBV sequences outside the 44 refs included within the graph all correctly predicted to have an appropriate ref
+#
+#
+# -- leverage this to pick the best graph-derived reference path
+"PickBestReference_44refGraph_Rscript.R"
+# path to required embedded path-specific node lists/etc. R object is hardcoded - to use you shuld generate 
+# the 'HBV_44Refs_pggb_wfmash_norm_Path_Specific_Nodes_wWeights.R' object and change R function path accordingly. 
+# Currently second argument tells the function where to look
+# First argument is the coverage file ('###_giraffe_coverage.tsv' file above). 
+# usage = 'Rscript PickBestReference_44refGraph_Rscript.R example_giraffe_coverage.tsv TRUE'
+
+
+
+
+
+
+
+
+
+
+
+cd ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/short_reads
+read_dir=~/work/dduchen3/projects/HBV/reference/simulated_reads/
+#--
+# Focus on B2: Nonrecombinant BJ/B1+B6 vs. recombinant BA/B2+B3-B5 #https://academic.oup.com/jid/article/196/10/1487/1075906
+#-- non-recombinant
+# B1: D23679
+BASE=B1_D23679
+#assign sim read files:
+# k-mer based normalization + subsampling
+ml bbmap
+bbnorm.sh in=${read_dir}/'HBV_Ref_Sequence_'$BASE'_2Msimreads_MODELmiseq_R1.fastq.gz' \
+  in2=${read_dir}/'HBV_Ref_Sequence_'$BASE'_2Msimreads_MODELmiseq_R2.fastq.gz' \
+  out=${BASE}'_5k_R1.fastq' out2=${BASE}'_5k_R2.fastq' target=5000
+# map to graph -- use mpmap
+graph=~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_edyeet_PangenomeRef/w2500_graphs/HBV_44refs_w2500_seqwish
+#~/code/dduchen_tools/vg map -x $graph.xg -g $graph.gcsa -f ${BASE}'_5k_R1.fastq' -f ${BASE}'_5k_R2.fastq' > ${BASE}_5k.gam
+~/code/dduchen_tools/vg mpmap -x $graph.xg -g $graph.gcsa -s $graph.snarls.pb -f ${BASE}'_5k_R1.fastq' -f ${BASE}'_5k_R2.fastq' > ${BASE}_5k.gamp
+~/code/dduchen_tools/vg view -K -G ${BASE}_5k.gamp > ${BASE}_5k_mpmap_view.gam
+# Compute the support using packed graph
+~/code/dduchen_tools/vg pack -x $graph.xg -g ${BASE}_5k_mpmap_view.gam -o ${BASE}_5k_mpmap_view.pack
+~/code/dduchen_tools/vg pack -x $graph.xg -i ${BASE}_5k_mpmap_view.pack -d >${BASE}_5k_mpmap_view_coverage.tsv   # a table representing per-bp coverage
+#-- mpmap with single path option (output to GAM rather than GAMP)
+~/code/dduchen_tools/vg mpmap -x $graph.xg -g $graph.gcsa -s $graph.snarls.pb -f ${BASE}'_5k_R1.fastq' -f ${BASE}'_5k_R2.fastq' -F GAM > ${BASE}_5k_mpmap.gam
+# Compute the support using packed graph
+~/code/dduchen_tools/vg pack -x $graph.xg -g ${BASE}_5k_mpmap.gam -o ${BASE}_5k_mpmap.pack
+~/code/dduchen_tools/vg pack -x $graph.xg -i ${BASE}_5k_mpmap.pack -d >${BASE}_5k_mpmap_coverage.tsv   # a table representing per-bp coverage
+# R
+# compare mpmap -F GAM vs. mpmap --> view
+load("~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/HBV_44Refs_pggb2500seqwish_Path_Specific_Nodes_wWeights.R")
+library(data.table);options(stringsAsFactors=F)
+dat<-fread("B1_D23679_5k_mpmap_coverage.tsv")
+# base-level coverage - get median coverage/node
+require(plyr)
+datsum<-ddply(dat, c("node.id"), summarise,
+               bplen    = length(node.id),
+               median = median(coverage),
+               mean = mean(coverage),
+               sd   = sd(coverage))
+
+#-- add the calculated 'weight' for each node
+all(node_weights$node==datsum$node.id)# TRUE
+datsum$node.weight<-node_weights$weight
+predict<-hbv_44ref_complete
+mapped<-as.character(datsum[datsum$median>1000,]$node.id) #should explore how low/high can go
+map_summary<-data.frame()
+for(i in 1:length(predict)){
+  ref<-names(predict[i])
+  mapped_nodes<-mapped[which(mapped %in% as.character(predict[[i]]$nodes))]
+  print(paste0(ref,": ",sum(datsum[datsum$node.id %in% mapped_nodes,]$bplen),"bp mapped"))
+  print(paste0(ref,": ",sum(datsum[datsum$node.id %in% mapped_nodes,]$node.weight)," weighted score"))
+  a<-ref
+  b<-sum(datsum[datsum$node.id %in% mapped_nodes,]$bplen)
+  c<-sum(datsum[datsum$node.id %in% mapped_nodes,]$node.weight)
+  map_summary<- rbind(map_summary,c(a,b,c))
+}
+colnames(map_summary)<-c("Reference_Path","Mapped_BP","Weighted_Score")
+map_summary[,2]<-as.numeric(map_summary[,2]);map_summary[,3]<-as.numeric(map_summary[,3])
+# works - B1_D23679 has by far the best weighted score!
+map_single_path<-map_summary
+#
+#dat<-fread("B1_D23679_5k_mpmap_view_coverage.tsv")
+# ...
+# both correct - B1_D23679 has by far the best score!
+sum(map_single_path$Mapped_BP-map_summary$Mapped_BP) # comparing single-path mode to mpmap --> view to GAM
+# 17 more bp mapped with single-path aligner, mean of 0.4 more
+# same lower scores + higher score for correct alignment (B1_D23679) of single-path mode (-F)
+#fwrite(map_single_path,file="B1_D23679_5k_mpmap_assessment.txt",quote=F,col.names=T,row.names=F,sep="\t")
+
+# ---- single-path mpmap --> gam mode
+# B6: AB287314
+cd ~/work/dduchen3/projects/HBV/genotyping/pangenome_ref/short_reads
+read_dir=~/work/dduchen3/projects/HBV/reference/simulated_reads/
+#--
+BASE=B6_AB287314
+#assign sim read files:
+# k-mer based normalization + subsampling
+ml bbmap
+bbnorm.sh in=${read_dir}/'HBV_Ref_Sequence_'$BASE'_2Msimreads_MODELmiseq_R1.fastq.gz' \
+  in2=${read_dir}/'HBV_Ref_Sequence_'$BASE'_2Msimreads_MODELmiseq_R2.fastq.gz' \
+  out=${BASE}'_5k_R1.fastq' out2=${BASE}'_5k_R2.fastq' target=5000
+# map to graph -- use mpmap
+graph=~/work/dduchen3/projects/HBV/reference/pggb_ref/HBV_44Refs_edyeet_PangenomeRef/w2500_graphs/HBV_44refs_w2500_seqwish
+~/code/dduchen_tools/vg mpmap -x $graph.xg -g $graph.gcsa -s $graph.snarls.pb -f ${BASE}'_5k_R1.fastq' -f ${BASE}'_5k_R2.fastq' -F GAM > ${BASE}_5k_mpmap.gam
+# Compute the support using packed graph
+~/code/dduchen_tools/vg pack -x $graph.xg -g ${BASE}_5k_mpmap.gam -o ${BASE}_5k_mpmap.pack
+~/code/dduchen_tools/vg pack -x $graph.xg -i ${BASE}_5k_mpmap.pack -d >${BASE}_5k_mpmap_coverage.tsv   # a table representing per-bp coverage
+# lets view a subset of the alignment
+# take first 100 reads <(zcat ${BASE}'_1.fastq.gz' | head -400)
+~/code/dduchen_tools/vg mpmap -x $graph.xg -g $graph.gcsa -s $graph.snarls.pb -f <(cat ${BASE}'_5k_R1.fastq' | head -400) -f <(cat ${BASE}'_5k_R2.fastq' | head -400) -F GAM > ${BASE}_5k_1k_aln.gam
+~/code/dduchen_tools/vg find -G ${BASE}_5k_1k_aln.gam -x $graph.xg > ${BASE}_5k_mpmap_1k_aln.vg
+~/code/dduchen_tools/vg view -d -A ${BASE}_5k_1k_aln.gam ${BASE}_5k_mpmap_1k_aln.vg -S > ${BASE}_mpmap_1k.dot
+# can add '-p' to shows paths
+neato -v -Tsvg ${BASE}_mpmap_1k.dot -oB6_AB287314_mpmap_aln.svg
